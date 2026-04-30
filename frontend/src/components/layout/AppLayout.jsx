@@ -8,8 +8,8 @@ export default function AppLayout() {
       <Sidebar />
       <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
         <TopBar />
-        <main className="flex-1 overflow-y-auto app-main relative">
-          <div className="max-w-[1440px] mx-auto p-6 md:p-8 lg:p-12 relative z-10">
+        <main className="flex-1 overflow-y-auto app-main relative bg-canvas">
+          <div className="w-full px-8 md:px-12 lg:px-16 py-8 md:py-12 relative z-10 min-h-full flex flex-col">
             <Outlet />
           </div>
         </main>

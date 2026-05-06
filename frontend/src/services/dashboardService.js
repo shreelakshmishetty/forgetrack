@@ -96,6 +96,27 @@ export async function getProgramOverview() {
   return { avg, highest, lowest };
 }
 
+export async function getSessionProgressCounts() {
+  const today = getTodayString();
+  
+  // Completed sessions (date <= today)
+  const { count: completedCount } = await supabase
+    .from('sessions')
+    .select('*', { count: 'exact', head: true })
+    .lte('date', today);
+
+  // Pending upcoming sessions (date > today)
+  const { count: upcomingCount } = await supabase
+    .from('sessions')
+    .select('*', { count: 'exact', head: true })
+    .gt('date', today);
+
+  return {
+    completed: completedCount || 0,
+    upcoming: upcomingCount || 0
+  };
+}
+
 export async function getRecentActivity() {
   // 1. Get last 5 distinct session attendances marked
   const { data: attData } = await supabase.from('attendance')

@@ -369,16 +369,23 @@ export default function AttendanceUpload() {
       )}
 
       {status === 'idle' && (
-        <div className="card p-12 border-2 border-dashed border-border-strong text-center hover:bg-surface-raised transition-colors cursor-pointer relative mt-8">
+        <div className="card p-12 border-2 border-dashed border-border-strong text-center hover:bg-surface-raised transition-all cursor-pointer relative mt-8 group">
           <input 
             type="file" 
             accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
             onChange={handleFileUpload}
             className="absolute inset-0 opacity-0 cursor-pointer"
           />
-          <FileSpreadsheet size={48} className="mx-auto text-fg-tertiary mb-4" strokeWidth={1} />
+          <div className="w-20 h-20 bg-surface-inset rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform duration-300">
+            <FileSpreadsheet size={40} className="text-fg-tertiary group-hover:text-accent-glow" strokeWidth={1.5} />
+          </div>
           <h3 className="text-h2 text-fg-primary mb-2">Select Spreadsheet</h3>
           <p className="text-body-lg text-fg-secondary">Drop your .csv or .xlsx file here, or click to browse.</p>
+          <div className="mt-8 flex justify-center gap-4 text-caption text-fg-tertiary">
+            <span className="flex items-center gap-1"><CheckCircle2 size={12}/> AI Column Detection</span>
+            <span className="flex items-center gap-1"><CheckCircle2 size={12}/> Multi-session Support</span>
+            <span className="flex items-center gap-1"><CheckCircle2 size={12}/> Automatic Date Matching</span>
+          </div>
         </div>
       )}
 

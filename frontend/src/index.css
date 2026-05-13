@@ -82,4 +82,12 @@
     color: theme('colors.danger.DEFAULT');
     border: 1px solid theme('colors.danger.border');
   }
+
+  @keyframes shrink-width {
+    from { width: 100%; }
+    to { width: 0%; }
+  }
+  .animate-shrink-width {
+    animation: shrink-width linear forwards;
+  }
 }

@@ -78,6 +78,7 @@ export default function StudentUpload() {
         if (!usnRaw || !nameRaw) return; // skip empty
         
         const usnUpper = usnRaw.toUpperCase();
+        const isValid = !!usnRaw && !!nameRaw && !!branchCol;
 
         if (seenUsns.has(usnUpper)) {
           dupCount++;
@@ -92,7 +93,8 @@ export default function StudentUpload() {
           email: emailCol ? String(row[emailCol] || '').trim() : null,
           branch_code: branchCol ? String(row[branchCol] || '').trim() : 'UNKNOWN',
           admission_number: admCol ? String(row[admCol] || '').trim() : null,
-          batch: '2024-2028' // default as per schema
+          batch: '2024-2028',
+          isValid: isValid
         });
       });
 
@@ -117,7 +119,7 @@ export default function StudentUpload() {
     try {
       // Supabase UPSERT based on USN
       const { data, error: upsertError } = await supabase.from('students')
-        .upsert(validStudents, { onConflict: 'usn' })
+        .upsert(validStudents.filter(s => s.isValid).map(({isValid, ...s}) => s), { onConflict: 'usn' })
         .select('id');
 
       if (upsertError) throw upsertError;
@@ -209,10 +211,10 @@ export default function StudentUpload() {
               </thead>
               <tbody className="divide-y divide-border-subtle">
                 {validStudents.slice(0, 50).map((student, i) => (
-                  <tr key={i} className="hover:bg-surface-raised transition-colors">
-                    <td className="p-3 text-body font-mono text-accent-glow">{student.usn}</td>
-                    <td className="p-3 text-body text-fg-primary">{student.name}</td>
-                    <td className="p-3 text-body text-fg-secondary">{student.branch_code}</td>
+                  <tr key={i} className={`hover:bg-surface-raised transition-colors ${!student.isValid ? 'bg-danger-bg/10' : ''}`}>
+                    <td className={`p-3 text-body font-mono ${!student.usn ? 'text-danger-fg bg-danger-bg/20' : 'text-accent-glow'}`}>{student.usn || 'MISSING'}</td>
+                    <td className={`p-3 text-body ${!student.name ? 'text-danger-fg bg-danger-bg/20' : 'text-fg-primary'}`}>{student.name || 'MISSING'}</td>
+                    <td className={`p-3 text-body ${student.branch_code === 'UNKNOWN' ? 'text-warning-fg' : 'text-fg-secondary'}`}>{student.branch_code}</td>
                     <td className="p-3 text-body text-fg-tertiary">{student.email || '-'}</td>
                   </tr>
                 ))}

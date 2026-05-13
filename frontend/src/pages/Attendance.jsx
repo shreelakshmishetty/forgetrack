@@ -2,7 +2,9 @@ import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Check, AlertTriangle, ChevronLeft, ChevronRight, Save, UserCheck, UserX, Calendar as CalendarIcon, Clock, Video, Users } from 'lucide-react';
+import { Check, AlertTriangle, ChevronLeft, ChevronRight, Save, UserCheck, UserX, Calendar as CalendarIcon, Clock, Video, Users, Search, Filter, Download, FileText, UserPlus, TrendingUp, PieChart as PieChartIcon } from 'lucide-react';
+import AttendanceCharts from '../components/Charts/AttendanceCharts';
+import SaveConfirmationModal from '../components/Attendance/SaveConfirmationModal';
 
 const getTodayString = () => {
   const d = new Date();
@@ -32,11 +34,75 @@ export default function Attendance() {
   const [loadingSession, setLoadingSession] = useState(false);
   const [loadingStudents, setLoadingStudents] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+
+  // Search & Filters
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all'); // all, present, absent
+  const [branchFilter, setBranchFilter] = useState('all');
   
+  // Analytics States
+  const [todayClasses, setTodayClasses] = useState(0);
+  const [weeklyAnalytics, setWeeklyAnalytics] = useState([]);
+  const [subjectAnalytics, setSubjectAnalytics] = useState([]);
+
   // Mini-form state for new session
   const [newTopic, setNewTopic] = useState('');
   const [newDuration, setNewDuration] = useState('2.0');
   const [newType, setNewType] = useState('offline');
+
+  // Load dashboard stats & analytics
+  useEffect(() => {
+    async function fetchDashboardStats() {
+      const today = getTodayString();
+      
+      // Fetch today's classes
+      const { count: classesToday } = await supabase
+        .from('sessions')
+        .select('*', { count: 'exact', head: true })
+        .eq('date', today);
+      setTodayClasses(classesToday || 0);
+
+      // Fetch weekly analytics (last 7 sessions)
+      const { data: recentSessions } = await supabase
+        .from('sessions')
+        .select('id, date, topic')
+        .order('date', { ascending: false })
+        .limit(7);
+
+      if (recentSessions) {
+        const analytics = await Promise.all(recentSessions.reverse().map(async (s) => {
+          const { data: att } = await supabase.from('attendance').select('present').eq('session_id', s.id);
+          const total = att?.length || 1; // avoid div by zero
+          const present = att?.filter(a => a.present).length || 0;
+          return {
+            date: s.date.split('-').slice(1).join('/'),
+            percentage: Math.round((present / total) * 100)
+          };
+        }));
+        setWeeklyAnalytics(analytics);
+      }
+
+      // Fetch subject-wise analytics
+      const { data: subjects } = await supabase.rpc('get_subject_attendance'); // Hypothetical or manual calculation
+      // For now, let's calculate manually from recent sessions
+      if (recentSessions) {
+        const subjMap = {};
+        for (const s of recentSessions) {
+          const { data: att } = await supabase.from('attendance').select('present').eq('session_id', s.id);
+          if (!subjMap[s.topic]) subjMap[s.topic] = { total: 0, present: 0 };
+          subjMap[s.topic].total += att?.length || 0;
+          subjMap[s.topic].present += att?.filter(a => a.present).length || 0;
+        }
+        const subjAnalytics = Object.entries(subjMap).map(([topic, stats]) => ({
+          subject: topic.length > 10 ? topic.substring(0, 10) + '...' : topic,
+          percentage: stats.total > 0 ? Math.round((stats.present / stats.total) * 100) : 0
+        }));
+        setSubjectAnalytics(subjAnalytics);
+      }
+    }
+    fetchDashboardStats();
+  }, [session]);
 
   // Load students once
   useEffect(() => {
@@ -126,7 +192,7 @@ export default function Attendance() {
     const rowsToInsert = students.map(s => ({
       student_id: s.id,
       session_id: session.id,
-      present: attendance[s.id] || false,
+      present: (attendance[s.id] === true || attendance[s.id] === 'late'),
       marked_by: user?.display_name || 'System'
     }));
 
@@ -134,12 +200,40 @@ export default function Attendance() {
     setSaving(false);
     
     if (!error) {
-      // Update original attendance so button disables
       setOriginalAttendance({...attendance});
+      setShowSuccess(true);
     } else {
       alert("Error saving attendance.");
     }
   };
+
+  const filteredStudents = useMemo(() => {
+    return students.filter(s => {
+      const matchesSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                           s.usn.toLowerCase().includes(searchQuery.toLowerCase());
+      const isPresent = attendance[s.id];
+      const matchesStatus = statusFilter === 'all' || 
+                           (statusFilter === 'present' && (isPresent === true || isPresent === 'late')) ||
+                           (statusFilter === 'absent' && isPresent === false);
+      const matchesBranch = branchFilter === 'all' || s.branch_code === branchFilter;
+      
+      return matchesSearch && matchesStatus && matchesBranch;
+    });
+  }, [students, searchQuery, statusFilter, branchFilter, attendance]);
+
+  const branches = useMemo(() => {
+    return Array.from(new Set(students.map(s => s.branch_code)));
+  }, [students]);
+
+  const presentCount = Object.values(attendance).filter(v => v === true || v === 'late').length;
+  const absentCount = students.length - presentCount; // Treats unmarked as absent for count
+
+  const attendancePercentage = students.length > 0 ? Math.round((presentCount / students.length) * 100) : 0;
+  
+  const pieData = [
+    { name: 'Present', value: presentCount },
+    { name: 'Absent', value: absentCount },
+  ];
 
   const isDirty = useMemo(() => {
     if (Object.keys(originalAttendance).length === 0 && Object.keys(attendance).length > 0) return true;
@@ -148,9 +242,6 @@ export default function Attendance() {
     }
     return false;
   }, [attendance, originalAttendance]);
-
-  const presentCount = Object.values(attendance).filter(Boolean).length;
-  const absentCount = students.length - presentCount; // Treats unmarked as absent for count
 
   // Calendar rendering helpers
   const handlePrevMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
@@ -199,9 +290,42 @@ export default function Attendance() {
     <div className="space-y-6 pb-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-h1">Attendance Dashboard</h1>
-          <p className="text-body-lg text-fg-secondary">Manage sessions and track student attendance.</p>
+          <h1 className="text-h1 flex items-center gap-3">
+            <TrendingUp className="text-accent-glow" />
+            Attendance Dashboard
+          </h1>
+          <p className="text-body-lg text-fg-secondary">Manage sessions, track analytics, and student rosters.</p>
         </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary !py-2 flex items-center gap-2">
+            <Download size={16} />
+            <span className="hidden sm:inline">Export CSV</span>
+          </button>
+          <button className="btn-primary !py-2 flex items-center gap-2">
+            <UserPlus size={16} />
+            <span className="hidden sm:inline">Add Student</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        {[
+          { label: 'Total Students', value: students.length, icon: Users, color: 'text-accent-glow' },
+          { label: 'Present Today', value: presentCount, icon: UserCheck, color: 'text-success-fg' },
+          { label: 'Absent Today', value: absentCount, icon: UserX, color: 'text-danger-fg' },
+          { label: 'Attendance %', value: `${attendancePercentage}%`, icon: PieChartIcon, color: 'text-warning-fg' },
+          { label: "Today's Classes", value: todayClasses, icon: CalendarIcon, color: 'text-info-fg' }
+        ].map((stat, i) => (
+          <div key={i} className="card !p-4 border border-border-subtle bg-surface/50 backdrop-blur-md shadow-sm hover:scale-[1.02] transition-transform duration-200">
+            <div className="flex items-center justify-between mb-2">
+              <stat.icon size={18} className={stat.color} />
+              <span className="text-[10px] font-bold text-fg-tertiary uppercase tracking-wider">Live</span>
+            </div>
+            <p className="text-h2 font-mono leading-none mb-1">{stat.value}</p>
+            <p className="text-[11px] font-medium text-fg-secondary uppercase tracking-tight">{stat.label}</p>
+          </div>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
@@ -209,35 +333,57 @@ export default function Attendance() {
         {/* LEFT SIDE: Attendance Panel */}
         <div className="lg:col-span-8 flex flex-col space-y-6">
           
-          {/* Summary Card */}
-          <div className="card !p-4 md:!p-6 flex flex-wrap items-center justify-between gap-4 border border-border-subtle shadow-sm bg-surface/50 backdrop-blur-sm">
-            <div>
-              <h2 className="text-h3 text-fg-primary">Student Attendance</h2>
-              <p className="text-caption text-fg-tertiary">Mark attendance for selected session</p>
-            </div>
-            
-            <div className="flex gap-4 sm:gap-8 bg-surface-inset p-3 rounded-xl border border-border-default">
-              <div className="text-center px-2 border-r border-border-default">
-                <p className="text-[11px] font-bold tracking-wider text-fg-tertiary uppercase mb-1">Total</p>
-                <p className="text-h3 text-fg-primary font-mono leading-none">{students.length}</p>
-              </div>
-              <div className="text-center px-2 border-r border-border-default">
-                <p className="text-[11px] font-bold tracking-wider text-success-fg uppercase mb-1">Present</p>
-                <p className="text-h3 text-success-fg font-mono leading-none">{presentCount}</p>
-              </div>
-              <div className="text-center px-2">
-                <p className="text-[11px] font-bold tracking-wider text-danger-fg uppercase mb-1">Absent</p>
-                <p className="text-h3 text-danger-fg font-mono leading-none">{absentCount}</p>
-              </div>
-            </div>
-          </div>
+          {/* Analytics Section */}
+          <AttendanceCharts 
+            weeklyData={weeklyAnalytics} 
+            monthlyData={subjectAnalytics} 
+            statusData={pieData} 
+          />
 
           {/* Roster & Controls */}
           {session ? (
-            <div className="card !p-0 overflow-hidden flex-1 border border-border-subtle shadow-lg">
+            <div className="card !p-0 overflow-hidden flex-1 border border-border-subtle shadow-xl flex flex-col">
               
+              {/* Search & Filters */}
+              <div className="p-4 bg-surface-raised border-b border-border-subtle grid grid-cols-1 md:grid-cols-12 gap-4">
+                <div className="md:col-span-5 relative">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-tertiary" />
+                  <input 
+                    type="text" 
+                    placeholder="Search Name or USN..." 
+                    className="input !pl-10 !py-2 text-sm bg-surface-inset"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <div className="md:col-span-3">
+                  <div className="relative">
+                    <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-tertiary" />
+                    <select 
+                      className="input !pl-9 !py-2 text-sm bg-surface-inset"
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
+                    >
+                      <option value="all">All Status</option>
+                      <option value="present">Present Only</option>
+                      <option value="absent">Absent Only</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="md:col-span-4">
+                  <select 
+                    className="input !py-2 text-sm bg-surface-inset"
+                    value={branchFilter}
+                    onChange={(e) => setBranchFilter(e.target.value)}
+                  >
+                    <option value="all">All Sections</option>
+                    {branches.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+              </div>
+
               {/* Quick Actions Header */}
-              <div className="p-4 bg-surface-raised border-b border-border-subtle flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="p-4 bg-surface-inset border-b border-border-subtle flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex gap-2">
                   <button onClick={() => markAll(true)} className="btn-secondary !py-2 !px-3 flex items-center gap-2 hover:border-success-border hover:bg-success-bg/10 transition-colors">
                     <UserCheck size={16} className="text-success-fg"/>
@@ -252,7 +398,7 @@ export default function Attendance() {
                 <button 
                   onClick={executeSave} 
                   disabled={saving || !isDirty} 
-                  className={`btn-primary !py-2 flex items-center gap-2 ${!isDirty ? 'opacity-50 cursor-not-allowed' : 'shadow-[0_0_15px_rgba(255,255,255,0.15)]'}`}
+                  className={`btn-primary !py-2 flex items-center gap-2 ${!isDirty ? 'opacity-50 cursor-not-allowed' : 'shadow-[0_0_20px_rgba(99,102,241,0.3)] hover:scale-105 transition-all'}`}
                 >
                   <Save size={16} />
                   <span>{saving ? 'Saving...' : Object.keys(originalAttendance).length > 0 ? 'Update Changes' : 'Save Attendance'}</span>
@@ -267,44 +413,72 @@ export default function Attendance() {
                 </div>
               ) : (
                 <div className="max-h-[600px] overflow-y-auto divide-y divide-border-subtle bg-surface">
-                  {students.map(student => {
+                  {filteredStudents.length > 0 ? filteredStudents.map(student => {
                     const isPresent = attendance[student.id];
+                    const initials = student.name.split(' ').map(n => n[0]).join('').substring(0, 2);
                     return (
-                      <div key={student.id} className="flex items-center justify-between p-4 hover:bg-surface-inset transition-colors group">
+                      <div key={student.id} className="flex items-center justify-between p-4 hover:bg-surface-raised transition-colors group relative">
+                        {/* Status Left Indicator */}
+                        <div className={`absolute left-0 top-0 bottom-0 w-1 transition-all duration-300 ${isPresent === true ? 'bg-success-fg' : isPresent === 'late' ? 'bg-warning-fg' : isPresent === false ? 'bg-danger-fg' : 'bg-transparent'}`} />
                         
                         <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-full bg-surface-raised border border-border-default flex items-center justify-center font-medium text-fg-secondary group-hover:border-fg-tertiary transition-colors">
-                            {student.name.charAt(0)}
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-lg transition-all duration-300 shadow-sm
+                            ${isPresent === true ? 'bg-success-bg/20 text-success-fg border border-success-border/50' : 
+                              isPresent === 'late' ? 'bg-warning-bg/20 text-warning-fg border border-warning-border/50' :
+                              isPresent === false ? 'bg-danger-bg/20 text-danger-fg border border-danger-border/50' : 
+                              'bg-surface-inset text-fg-tertiary border border-border-default'}`}
+                          >
+                            {initials}
                           </div>
                           <div>
-                            <p className="text-body-lg font-medium text-fg-primary group-hover:text-white transition-colors">{student.name}</p>
-                            <p className="text-caption font-mono text-fg-tertiary">{student.usn}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-body-lg font-bold text-fg-primary group-hover:text-white transition-colors">{student.name}</p>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-inset border border-border-default text-fg-tertiary font-mono">
+                                {student.branch_code}
+                              </span>
+                            </div>
+                            <p className="text-caption font-mono text-fg-tertiary tracking-tight uppercase">{student.usn}</p>
                           </div>
                         </div>
 
                         {/* Fast Marking Toggles */}
-                        <div className="flex bg-surface-raised p-1 rounded-lg border border-border-default">
+                        <div className="flex bg-surface-inset p-1 rounded-xl border border-border-default shadow-inner">
                           <button
                             onClick={() => markStudent(student.id, true)}
-                            className={`px-4 py-1.5 rounded-md text-caption font-medium transition-all duration-200 flex items-center gap-1.5
-                              ${isPresent === true ? 'bg-success-fg text-canvas shadow-sm' : 'text-fg-secondary hover:text-success-fg hover:bg-success-bg/10'}
-                            `}
+                            className={`px-4 py-2 rounded-lg text-caption font-bold transition-all duration-300 flex items-center gap-1.5
+                              ${isPresent === true ? 'bg-success-fg text-canvas shadow-[0_0_15px_rgba(16,185,129,0.4)] scale-105' : 'text-fg-secondary hover:text-success-fg'}`}
                           >
+                            {isPresent === true && <Check size={14} />}
                             Present
                           </button>
                           <button
-                            onClick={() => markStudent(student.id, false)}
-                            className={`px-4 py-1.5 rounded-md text-caption font-medium transition-all duration-200 flex items-center gap-1.5
-                              ${isPresent === false ? 'bg-danger-fg text-white shadow-sm' : 'text-fg-secondary hover:text-danger-fg hover:bg-danger-bg/10'}
-                            `}
+                            onClick={() => markStudent(student.id, 'late')}
+                            className={`px-4 py-2 rounded-lg text-caption font-bold transition-all duration-300 flex items-center gap-1.5
+                              ${isPresent === 'late' ? 'bg-warning-fg text-canvas shadow-[0_0_15px_rgba(245,158,11,0.4)] scale-105' : 'text-fg-secondary hover:text-warning-fg'}`}
                           >
+                            Late
+                          </button>
+                          <button
+                            onClick={() => markStudent(student.id, false)}
+                            className={`px-4 py-2 rounded-lg text-caption font-bold transition-all duration-300 flex items-center gap-1.5
+                              ${isPresent === false ? 'bg-danger-fg text-white shadow-[0_0_15px_rgba(239,68,68,0.4)] scale-105' : 'text-fg-secondary hover:text-danger-fg'}`}
+                          >
+                            {isPresent === false && <X size={14} />}
                             Absent
                           </button>
                         </div>
                         
                       </div>
                     );
-                  })}
+                  }) : (
+                    <div className="p-12 text-center flex flex-col items-center">
+                      <div className="w-16 h-16 bg-surface-inset rounded-full flex items-center justify-center mb-4 text-fg-tertiary">
+                        <Search size={32} />
+                      </div>
+                      <p className="text-fg-secondary">No students found matching your filters.</p>
+                      <button onClick={() => {setSearchQuery(''); setStatusFilter('all'); setBranchFilter('all');}} className="text-accent-glow text-sm mt-2 hover:underline">Clear all filters</button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -453,6 +627,9 @@ export default function Attendance() {
 
         </div>
       </div>
+      
+      {/* Popups */}
+      <SaveConfirmationModal show={showSuccess} onClose={() => setShowSuccess(false)} />
     </div>
   );
 }
